@@ -14,4 +14,4 @@ This project implements a modern data pipeline architecture using Azure services
 ## Instructions to Run the Project
 1. Clone the repository:  
    ```bash
-   git clone https://github.com/mspanwar21/cst8918-final-project-group1
+   git clone https://github.com/mspanwar21/cst8918-final-project-group-1
