@@ -56,7 +56,7 @@ jobs:
         run: terraform validate -no-color
 
       - name: tfsec (security scan)
-        uses: aquasecurity/tfsec-action@v1
+        uses: aquasecurity/tfsec-action@v1.0.1
         with:
           working_directory: infra
 
