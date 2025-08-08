@@ -46,77 +46,73 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
 
       - name: tflint
-        working-directory: infra
         run: |
           tflint --version
           tflint -f compact
+        working-directory: infra
 
-      - name: Cache .terraform
+      - name: Cache .terraform (test)
         uses: actions/cache@v4
         with:
-          path: infra/.terraform
+          path: infra/envs/test/.terraform
           key: tf-${{ runner.os }}-${{ hashFiles('infra/**/*.tf') }}
           restore-keys: |
             tf-${{ runner.os }}-
 
-      - name: Terraform init
-        working-directory: infra
-        run: |
-          terraform init -input=false
-          # If you need backend config, add -backend-config lines here
+      - name: Terraform init (test)
+        run: terraform -chdir=infra/envs/test init -input=false -no-color
 
-      - name: Terraform plan
+      - name: Terraform plan (test)
         id: plan
-        working-directory: infra
+        env:
+          TF_VAR_weather_api_key: ${{ secrets.WEATHER_API_KEY }}
         run: |
-          set -e
-          # detailed exit codes: 0 = no changes, 2 = changes, 1 = error
-          terraform plan \
+          set +e
+          terraform -chdir=infra/envs/test plan \
             -no-color \
             -input=false \
             -lock=true \
             -lock-timeout=5m \
-            -out=tfplan || exitcode=$?
-          exitcode=${exitcode:-0}
+            -detailed-exitcode \
+            -out=tfplan
+          exitcode=$?
           echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
-          # Save human-readable plan too
-          terraform show -no-color tfplan > tfplan.txt
+          terraform -chdir=infra/envs/test show -no-color tfplan > infra/envs/test/tfplan.txt
+          exit $([ $exitcode -eq 1 ] && echo 1 || echo 0)
 
       - name: Upload plan artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.sha }}
           path: |
-            infra/tfplan
-            infra/tfplan.txt
+            infra/envs/test/tfplan
+            infra/envs/test/tfplan.txt
 
       - name: Set change flag
         id: set_change_flag
         run: |
           if [ "${{ steps.plan.outputs.exitcode }}" = "2" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
-          elif [ "${{ steps.plan.outputs.exitcode }}" = "0" ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
           else
-            echo "Terraform plan failed"; exit 1
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
       - name: PR summary & comment
         uses: actions/github-script@v7
+        env:
+          HAS_CHANGES: ${{ steps.set_change_flag.outputs.has_changes }}
         with:
           script: |
-            const hasChanges = ${{ steps.set_change_flag.outputs.has_changes == 'true' ? 'true' : 'false' }};
-            const body = hasChanges === 'true'
+            const hasChanges = process.env.HAS_CHANGES === 'true';
+            const body = hasChanges
               ? `✅ **Plan succeeded** and **changes are detected**.\n\nArtifact: \`tfplan-${process.env.GITHUB_SHA}\` (includes \`tfplan\` & \`tfplan.txt\`).`
               : `✅ **Plan succeeded** and **no changes** were detected.\n\nNothing to apply.`;
-            // Job summary
             core.summary.addHeading('Terraform Plan');
             core.summary.addRaw(body);
             await core.summary.write();
-            // PR comment
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body
-            })
+            });
