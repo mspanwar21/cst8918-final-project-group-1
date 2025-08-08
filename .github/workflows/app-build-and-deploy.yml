@@ -58,12 +58,10 @@ jobs:
           ls -la app || true
 
       - name: Build & Push image (tag = commit SHA)
-        working-directory: app
         run: |
-          test -f Dockerfile || { echo "No Dockerfile in $(pwd)"; exit 1; }
+          test -f Dockerfile || { echo "No Dockerfile in repo root"; exit 1; }
           docker build -f Dockerfile -t "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" .
           docker push "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}"
-
 
       - name: Expose image tag as output
         id: meta
@@ -102,8 +100,9 @@ jobs:
 
       - name: Apply Kubernetes manifests (test)
         run: |
-          sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" k8s/deployment.yaml | kubectl -n weather apply -f -
-          kubectl -n weather apply -f k8s/service.yaml
+          sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
+          kubectl -n weather apply -f service.yaml
+
 
       - name: Wait for rollout
         run: |
@@ -142,8 +141,9 @@ jobs:
 
       - name: Apply Kubernetes manifests (prod)
         run: |
-          sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" k8s/deployment.yaml | kubectl -n weather apply -f -
-          kubectl -n weather apply -f k8s/service.yaml
+          sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
+          kubectl -n weather apply -f service.yaml
+
 
       - name: Wait for rollout
         run: |
