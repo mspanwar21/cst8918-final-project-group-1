@@ -1,0 +1,8 @@
+{
+    "name": "pull-request",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:mspanwar21/cst8918-final-project-group1:pull_request",
+    "description": "CST8918 Lab12 - GitHub Actions",
+    "audiences": ["api://AzureADTokenExchange"]
+  }
+  
