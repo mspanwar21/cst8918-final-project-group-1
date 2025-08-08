@@ -42,4 +42,12 @@ jobs:
         run: terraform -chdir=infra/envs/prod init -input=false -no-color
 
       - name: Terraform apply (prod)
-        run: terraform -chdir=infra/envs/prod apply -auto-approve -input=false -lock=true -lock-timeout=5m -no-color
+        env:
+          TF_VAR_weather_api_key: ${{ secrets.WEATHER_API_KEY }}
+        run: |
+          terraform -chdir=infra/envs/prod apply \
+            -auto-approve \
+            -input=false \
+            -lock=true \
+            -lock-timeout=5m \
+            -no-color
