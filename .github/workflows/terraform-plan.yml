@@ -64,6 +64,8 @@ jobs:
 
       - name: Terraform plan (test)
         id: plan
+        env:
+          TF_VAR_weather_api_key: ${{ secrets.WEATHER_API_KEY }}
         run: |
           set +e
           terraform -chdir=infra/envs/test plan \
@@ -74,9 +76,7 @@ jobs:
             -detailed-exitcode \
             -out=tfplan
           exitcode=$?
-          # Map Terraform's special exit codes: 0=no changes, 2=changes, 1=error
           echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
-          # Always produce a human-readable plan file for reviewers
           terraform -chdir=infra/envs/test show -no-color tfplan > infra/envs/test/tfplan.txt
           exit $([ $exitcode -eq 1 ] && echo 1 || echo 0)
 
