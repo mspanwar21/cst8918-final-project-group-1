@@ -49,11 +49,21 @@ jobs:
 
       - name: Azure ACR Login
         run: az acr login --name "${{ vars.ACR_NAME }}"
+      
+      - name: Debug build context
+        run: |
+          echo "DOCKERFILE_PATH='${{ env.DOCKERFILE_PATH }}'"
+          echo "BUILD_CONTEXT='${{ env.BUILD_CONTEXT }}'"
+          ls -la
+          ls -la app || true
 
       - name: Build & Push image (tag = commit SHA)
+        working-directory: app
         run: |
-          docker build -f "$DOCKERFILE_PATH" -t "$ACR_LOGIN_SERVER/$IMAGE_NAME:$SHA_TAG" "$BUILD_CONTEXT"
-          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:$SHA_TAG"
+          test -f Dockerfile || { echo "No Dockerfile in $(pwd)"; exit 1; }
+          docker build -f Dockerfile -t "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" .
+          docker push "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}"
+
 
       - name: Expose image tag as output
         id: meta
