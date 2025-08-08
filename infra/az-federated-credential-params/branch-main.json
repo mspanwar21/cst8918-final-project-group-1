@@ -1,0 +1,8 @@
+{
+    "name": "branch-main",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:mspanwar21/cst8918-final-project-group-1:ref:refs/heads/main",
+    "description": "CST8918 Lab12 - GitHub Actions",
+    "audiences": ["api://AzureADTokenExchange"]
+  }
+  
