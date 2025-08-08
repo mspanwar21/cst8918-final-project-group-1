@@ -7,7 +7,6 @@ on:
       - ".github/workflows/terraform-static.yml"
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -20,16 +19,12 @@ env:
 jobs:
   static:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        envdir: [ "infra/envs/test", "infra/envs/prod" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Azure OIDC Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -42,29 +37,28 @@ jobs:
       - name: Cache .terraform
         uses: actions/cache@v4
         with:
-          path: infra/.terraform
-          key: tf-${{ runner.os }}-${{ hashFiles('infra/**/*.tf') }}
+          path: ${{ matrix.envdir }}/.terraform
+          key: tf-${{ runner.os }}-${{ matrix.envdir }}-${{ hashFiles('infra/**/*.tf') }}
           restore-keys: |
+            tf-${{ runner.os }}-${{ matrix.envdir }}-
             tf-${{ runner.os }}-
 
-      - name: Terraform init (remote backend)
-        working-directory: infra
-        run: terraform init -input=false -no-color
+      - name: Terraform init (no backend)
+        run: terraform -chdir=${{ matrix.envdir }} init -backend=false -input=false -no-color
 
       - name: Terraform validate
-        working-directory: infra
-        run: terraform validate -no-color
-
-      - name: tfsec (security scan)
-        uses: aquasecurity/tfsec-action@v1.0.1
-        with:
-          working_directory: infra
+        run: terraform -chdir=${{ matrix.envdir }} validate -no-color
 
       - name: Setup tflint
         uses: terraform-linters/setup-tflint@v4
 
       - name: tflint
-        working-directory: infra
         run: |
           tflint --version
           tflint -f compact
+        working-directory: ${{ matrix.envdir }}
+
+      - name: tfsec (security scan)
+        uses: aquasecurity/tfsec-action@v1.0.1
+        with:
+          working_directory: ${{ matrix.envdir }}
