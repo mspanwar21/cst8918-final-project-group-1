@@ -21,7 +21,7 @@ env:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    environment: production  # keeps the approval gate if you use it
+    environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,31 +38,8 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Terraform init
-        working-directory: infra
-        run: |
-          terraform init \
-            -input=false
-          # If you need explicit backend config, add:
-          # -backend-config="resource_group_name=${{ vars.TF_BACKEND_RG }}" \
-          # -backend-config="storage_account_name=${{ vars.TF_BACKEND_STORAGE }}" \
-          # -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
-          # -backend-config="key=${{ vars.TF_BACKEND_KEY }}"
+      - name: Terraform init (prod)
+        run: terraform -chdir=infra/envs/prod init -input=false -no-color
 
-      # If you use workspaces for envs, uncomment:
-      # - name: Select workspace
-      #   working-directory: infra
-      #   run: |
-      #     terraform workspace select prod || terraform workspace new prod
-
-      - name: Terraform apply
-        working-directory: infra
-        run: |
-          terraform apply \
-            -auto-approve \
-            -input=false \
-            -lock=true \
-            -lock-timeout=5m \
-            -no-color
-          # If you pass variables:
-          # -var-file="prod.tfvars"
+      - name: Terraform apply (prod)
+        run: terraform -chdir=infra/envs/prod apply -auto-approve -input=false -lock=true -lock-timeout=5m -no-color
