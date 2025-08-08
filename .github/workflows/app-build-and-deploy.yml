@@ -90,8 +90,8 @@ jobs:
       - name: AKS set-context (test)
         uses: azure/aks-set-context@v4
         with:
-          resource-group: ${{ env.AKS_RG }}
-          cluster-name: ${{ env.AKS_CLUSTER }}
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name:  ${{ vars.AKS_TEST_NAME }}
           use-kubelogin: true
 
       - name: Create namespace if missing
