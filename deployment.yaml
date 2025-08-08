@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: remix-weather-app
+  namespace: weather          # <-- add this (or keep default if you prefer)
 spec:
   replicas: 1
   selector:
@@ -14,7 +15,8 @@ spec:
     spec:
       containers:
         - name: remix-weather
-          image: acrcst8918test.azurecr.io/remix-weather:latest
+          image: IMAGE_PLACEHOLDER   # <-- was acr.../remix-weather:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
           env:
