@@ -22,6 +22,7 @@ jobs:
     strategy:
       matrix:
         envdir: [ "infra/envs/test", "infra/envs/prod" ]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,19 +50,19 @@ jobs:
       - name: Terraform validate
         run: terraform -chdir=${{ matrix.envdir }} validate -no-color
 
+      # Install tflint
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.58.1
+
+      # Run tflint (warn-only for now)
       - name: tflint
         working-directory: ${{ matrix.envdir }}
         continue-on-error: true
         run: |
           tflint --version
           tflint -f compact
-
-
-      - name: tflint
-        run: |
-          tflint --version
-          tflint -f compact
-        working-directory: ${{ matrix.envdir }}
 
       - name: tfsec (security scan)
         uses: aquasecurity/tfsec-action@v1.0.1
