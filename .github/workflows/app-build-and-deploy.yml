@@ -75,14 +75,16 @@ jobs:
 
       - name: Install kubelogin
         uses: azure/use-kubelogin@v1
-        with: { kubelogin-version: latest }
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        with:
+          kubelogin-version: latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: AKS set-context (test)
         uses: azure/aks-set-context@v4
         with:
           resource-group: ${{ vars.RESOURCE_GROUP }}
-          cluster-name:  ${{ vars.AKS_TEST_NAME }}
+          cluster-name: ${{ vars.AKS_TEST_NAME }}
           use-kubelogin: true
 
       - name: Create namespace if missing
@@ -130,14 +132,16 @@ jobs:
 
       - name: Install kubelogin
         uses: azure/use-kubelogin@v1
-        with: { kubelogin-version: latest }
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        with:
+          kubelogin-version: latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: AKS set-context (prod)
         uses: azure/aks-set-context@v4
         with:
           resource-group: ${{ vars.RESOURCE_GROUP }}
-          cluster-name:  ${{ vars.AKS_PROD_NAME }}
+          cluster-name: ${{ vars.AKS_PROD_NAME }}
           use-kubelogin: true
 
       - name: Create namespace if missing
