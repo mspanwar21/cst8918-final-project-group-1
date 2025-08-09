@@ -28,6 +28,8 @@ jobs:
     name: Build & Push Image
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,9 +53,6 @@ jobs:
       - name: Expose image ref
         id: meta
         run: echo "image=${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" >> $GITHUB_OUTPUT
-
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
 
   deploy-test:
     name: Deploy to AKS Test (PR only)
@@ -96,18 +95,34 @@ jobs:
             --from-literal=WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Verify image exists in ACR
+        run: |
+          az acr repository show-tags -n "${{ vars.ACR_NAME }}" --repository "${{ env.IMAGE_NAME }}" \
+            | grep -q "${{ env.SHA_TAG }}" \
+            || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
+
       - name: Apply manifests (test)
         run: |
+          # Apply manifests (sed works if your deployment.yaml uses IMAGE_PLACEHOLDER)
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
+          # Regardless of sed, force the Deployment to use the new image:
+          kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
-      - name: Diagnose if not ready
+      - name: Diagnose rollout (test)
         run: |
           set -x
+          echo "=== Deployment ==="
           kubectl -n weather get deploy remix-weather-app -o wide || true
-          kubectl -n weather get rs,pods -l app=remix-weather-app -o wide || true
           kubectl -n weather describe deploy remix-weather-app || true
+          echo "=== ReplicaSets & Pods ==="
+          kubectl -n weather get rs -l app=remix-weather-app -o wide || true
+          kubectl -n weather get pods -l app=remix-weather-app -o wide || true
+          echo "=== Recent Events ==="
           kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
+          echo "=== Pod logs (first pod) ==="
+          POD=$(kubectl -n weather get pods -l app=remix-weather-app -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then kubectl -n weather logs "$POD" --all-containers=true || true; fi
 
       - name: Wait for rollout
         run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=300s
@@ -153,18 +168,32 @@ jobs:
             --from-literal=WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Verify image exists in ACR
+        run: |
+          az acr repository show-tags -n "${{ vars.ACR_NAME }}" --repository "${{ env.IMAGE_NAME }}" \
+            | grep -q "${{ env.SHA_TAG }}" \
+            || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
+
       - name: Apply manifests (prod)
         run: |
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
+          kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
-      - name: Diagnose if not ready
+      - name: Diagnose rollout (prod)
         run: |
           set -x
+          echo "=== Deployment ==="
           kubectl -n weather get deploy remix-weather-app -o wide || true
-          kubectl -n weather get rs,pods -l app=remix-weather-app -o wide || true
           kubectl -n weather describe deploy remix-weather-app || true
+          echo "=== ReplicaSets & Pods ==="
+          kubectl -n weather get rs -l app=remix-weather-app -o wide || true
+          kubectl -n weather get pods -l app=remix-weather-app -o wide || true
+          echo "=== Recent Events ==="
           kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
+          echo "=== Pod logs (first pod) ==="
+          POD=$(kubectl -n weather get pods -l app=remix-weather-app -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then kubectl -n weather logs "$POD" --all-containers=true || true; fi
 
       - name: Wait for rollout
         run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=300s
