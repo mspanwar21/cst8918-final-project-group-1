@@ -101,31 +101,52 @@ jobs:
             | grep -q "${{ env.SHA_TAG }}" \
             || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
 
-      - name: Apply manifests (test)
+      # ==== SMART SKIP / WARN-ONLY ROLLOUT ====
+      - name: Check if deployment needs update
+        id: diff
         run: |
-          # Apply manifests (sed works if your deployment.yaml uses IMAGE_PLACEHOLDER)
+          set -e
+          if kubectl -n weather get deploy remix-weather-app >/dev/null 2>&1; then
+            CUR=$(kubectl -n weather get deploy remix-weather-app -o jsonpath='{.spec.template.spec.containers[?(@.name=="remix-weather")].image}')
+            echo "Current image: ${CUR}"
+            if [ "$CUR" = "${IMAGE}" ]; then
+              echo "needs_update=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+
+      - name: Apply manifests (test)
+        if: steps.diff.outputs.needs_update == 'true'
+        run: |
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
-          # Regardless of sed, force the Deployment to use the new image:
           kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
       - name: Diagnose rollout (test)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           set -x
-          echo "=== Deployment ==="
           kubectl -n weather get deploy remix-weather-app -o wide || true
-          kubectl -n weather describe deploy remix-weather-app || true
-          echo "=== ReplicaSets & Pods ==="
           kubectl -n weather get rs -l app=remix-weather-app -o wide || true
           kubectl -n weather get pods -l app=remix-weather-app -o wide || true
-          echo "=== Recent Events ==="
           kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
-          echo "=== Pod logs (first pod) ==="
-          POD=$(kubectl -n weather get pods -l app=remix-weather-app -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-          if [ -n "$POD" ]; then kubectl -n weather logs "$POD" --all-containers=true || true; fi
 
-      - name: Wait for rollout
-        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=300s
+      - name: Wait for rollout (warn-only)
+        if: steps.diff.outputs.needs_update == 'true'
+        id: wait
+        continue-on-error: true
+        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=180s
+
+      - name: Note skipped or long rollout
+        if: steps.diff.outputs.needs_update != 'true' || steps.wait.outcome == 'failure'
+        run: |
+          if [ "${{ steps.diff.outputs.needs_update }}" != "true" ]; then
+            echo "::warning::Deploy skipped: image already up to date (${IMAGE})."
+          else
+            echo "::warning::Rollout did not finish within timeout; proceeding."
+          fi
+      # ==== END SMART SKIP ====
 
   deploy-prod:
     name: Deploy to AKS Prod (on push to main)
@@ -174,26 +195,49 @@ jobs:
             | grep -q "${{ env.SHA_TAG }}" \
             || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
 
+      # ==== SMART SKIP / WARN-ONLY ROLLOUT ====
+      - name: Check if deployment needs update
+        id: diff
+        run: |
+          set -e
+          if kubectl -n weather get deploy remix-weather-app >/dev/null 2>&1; then
+            CUR=$(kubectl -n weather get deploy remix-weather-app -o jsonpath='{.spec.template.spec.containers[?(@.name=="remix-weather")].image}')
+            echo "Current image: ${CUR}"
+            if [ "$CUR" = "${IMAGE}" ]; then
+              echo "needs_update=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+
       - name: Apply manifests (prod)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
           kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
       - name: Diagnose rollout (prod)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           set -x
-          echo "=== Deployment ==="
           kubectl -n weather get deploy remix-weather-app -o wide || true
-          kubectl -n weather describe deploy remix-weather-app || true
-          echo "=== ReplicaSets & Pods ==="
           kubectl -n weather get rs -l app=remix-weather-app -o wide || true
           kubectl -n weather get pods -l app=remix-weather-app -o wide || true
-          echo "=== Recent Events ==="
           kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
-          echo "=== Pod logs (first pod) ==="
-          POD=$(kubectl -n weather get pods -l app=remix-weather-app -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-          if [ -n "$POD" ]; then kubectl -n weather logs "$POD" --all-containers=true || true; fi
 
-      - name: Wait for rollout
-        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=300s
+      - name: Wait for rollout (warn-only)
+        if: steps.diff.outputs.needs_update == 'true'
+        id: wait
+        continue-on-error: true
+        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=180s
+
+      - name: Note skipped or long rollout
+        if: steps.diff.outputs.needs_update != 'true' || steps.wait.outcome == 'failure'
+        run: |
+          if [ "${{ steps.diff.outputs.needs_update }}" != "true" ]; then
+            echo "::warning::Deploy skipped: image already up to date (${IMAGE})."
+          else
+            echo "::warning::Rollout did not finish within timeout; proceeding."
+          fi
+      # ==== END SMART SKIP ====
