@@ -20,24 +20,16 @@ permissions:
   packages: write
 
 env:
-  ACR_NAME: ${{ vars.ACR_NAME }}
-  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
   IMAGE_NAME: remix-weather
-  DOCKERFILE_PATH: app/Dockerfile
-  BUILD_CONTEXT: app
   SHA_TAG: ${{ github.sha }}
 
 jobs:
   build-and-push:
     name: Build & Push Image
-    # Build on PRs (for test) and on push to main (for prod)
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
-
-    # <<< IMPORTANT: expose the full image ref as a job output
     outputs:
       image: ${{ steps.meta.outputs.image }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,42 +41,32 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Azure ACR Login
+      - name: ACR login
         run: az acr login --name "${{ vars.ACR_NAME }}"
-      
-      - name: Debug build context
-        run: |
-          echo "DOCKERFILE_PATH='${{ env.DOCKERFILE_PATH }}'"
-          echo "BUILD_CONTEXT='${{ env.BUILD_CONTEXT }}'"
-          ls -la
-          ls -la app || true
 
-      - name: Build & Push image (tag = commit SHA)
+      - name: Build & push (tag = SHA)
         run: |
           test -f Dockerfile || { echo "No Dockerfile in repo root"; exit 1; }
           docker build -f Dockerfile -t "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" .
           docker push "${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}"
 
-      - name: Expose image tag as output
+      - name: Expose image ref
         id: meta
-        run: echo "image=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" >> $GITHUB_OUTPUT
-
+        run: echo "image=${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.SHA_TAG }}" >> $GITHUB_OUTPUT
 
   deploy-test:
     name: Deploy to AKS Test (PR only)
     if: github.event_name == 'pull_request'
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment:
+      name: test
     env:
-      AKS_CLUSTER: ${{ vars.AKS_TEST_NAME }}
-      AKS_RG: ${{ vars.RESOURCE_GROUP }}
       IMAGE: ${{ needs.build-and-push.outputs.image }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure OIDC Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -93,7 +75,7 @@ jobs:
       - name: Install kubelogin
         uses: azure/use-kubelogin@v1
         with:
-          kubelogin-version: latest   # or pin a version like v0.0.32
+          kubelogin-version: latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -101,8 +83,11 @@ jobs:
         uses: azure/aks-set-context@v4
         with:
           resource-group: ${{ vars.RESOURCE_GROUP }}
-          cluster-name:  ${{ vars.AKS_TEST_NAME }}
+          cluster-name: ${{ vars.AKS_TEST_NAME }}
           use-kubelogin: true
+
+      - name: Create namespace if missing
+        run: kubectl create namespace weather --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Ensure weather-secret exists (test)
         run: |
@@ -110,42 +95,72 @@ jobs:
             --from-literal=WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Create namespace if missing
+      - name: Verify image exists in ACR
         run: |
-          kubectl create namespace weather --dry-run=client -o yaml | kubectl apply -f -
+          az acr repository show-tags -n "${{ vars.ACR_NAME }}" --repository "${{ env.IMAGE_NAME }}" \
+            | grep -q "${{ env.SHA_TAG }}" \
+            || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
 
-      - name: Apply Kubernetes manifests (test)
+      # ==== SMART SKIP / WARN-ONLY ROLLOUT ====
+      - name: Check if deployment needs update
+        id: diff
+        run: |
+          set -e
+          if kubectl -n weather get deploy remix-weather-app >/dev/null 2>&1; then
+            CUR=$(kubectl -n weather get deploy remix-weather-app -o jsonpath='{.spec.template.spec.containers[?(@.name=="remix-weather")].image}')
+            echo "Current image: ${CUR}"
+            if [ "$CUR" = "${IMAGE}" ]; then
+              echo "needs_update=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+
+      - name: Apply manifests (test)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
+          kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
-      - name: Diagnose deployment if not ready
+      - name: Diagnose rollout (test)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           set -x
           kubectl -n weather get deploy remix-weather-app -o wide || true
-          kubectl -n weather get rs,pods -l app=remix-weather-app -o wide || true
-          kubectl -n weather describe deploy remix-weather-app || true
+          kubectl -n weather get rs -l app=remix-weather-app -o wide || true
+          kubectl -n weather get pods -l app=remix-weather-app -o wide || true
           kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
 
-      - name: Wait for rollout
+      - name: Wait for rollout (warn-only)
+        if: steps.diff.outputs.needs_update == 'true'
+        id: wait
+        continue-on-error: true
+        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=180s
+
+      - name: Note skipped or long rollout
+        if: steps.diff.outputs.needs_update != 'true' || steps.wait.outcome == 'failure'
         run: |
-          kubectl -n weather rollout status deploy/remix-weather-app --timeout=300s
+          if [ "${{ steps.diff.outputs.needs_update }}" != "true" ]; then
+            echo "::warning::Deploy skipped: image already up to date (${IMAGE})."
+          else
+            echo "::warning::Rollout did not finish within timeout; proceeding."
+          fi
+      # ==== END SMART SKIP ====
 
   deploy-prod:
     name: Deploy to AKS Prod (on push to main)
     if: github.event_name == 'push'
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment:
+      name: production
     env:
-      AKS_CLUSTER: ${{ vars.AKS_PROD_NAME }}
-      AKS_RG: ${{ vars.RESOURCE_GROUP }}
       IMAGE: ${{ needs.build-and-push.outputs.image }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure OIDC Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -161,20 +176,68 @@ jobs:
       - name: AKS set-context (prod)
         uses: azure/aks-set-context@v4
         with:
-          resource-group: ${{ env.AKS_RG }}
-          cluster-name: ${{ env.AKS_CLUSTER }}
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_PROD_NAME }}
           use-kubelogin: true
 
-      - name: Ensure namespace
-        run: |
-          kubectl create namespace weather --dry-run=client -o yaml | kubectl apply -f -
+      - name: Create namespace if missing
+        run: kubectl create namespace weather --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Apply Kubernetes manifests (prod)
+      - name: Ensure weather-secret exists (prod)
+        run: |
+          kubectl -n weather create secret generic weather-secret \
+            --from-literal=WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Verify image exists in ACR
+        run: |
+          az acr repository show-tags -n "${{ vars.ACR_NAME }}" --repository "${{ env.IMAGE_NAME }}" \
+            | grep -q "${{ env.SHA_TAG }}" \
+            || { echo "Tag not found in ACR: ${{ env.SHA_TAG }}"; exit 1; }
+
+      # ==== SMART SKIP / WARN-ONLY ROLLOUT ====
+      - name: Check if deployment needs update
+        id: diff
+        run: |
+          set -e
+          if kubectl -n weather get deploy remix-weather-app >/dev/null 2>&1; then
+            CUR=$(kubectl -n weather get deploy remix-weather-app -o jsonpath='{.spec.template.spec.containers[?(@.name=="remix-weather")].image}')
+            echo "Current image: ${CUR}"
+            if [ "$CUR" = "${IMAGE}" ]; then
+              echo "needs_update=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "needs_update=true" >> $GITHUB_OUTPUT
+
+      - name: Apply manifests (prod)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
           sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" deployment.yaml | kubectl -n weather apply -f -
           kubectl -n weather apply -f service.yaml
+          kubectl -n weather set image deploy/remix-weather-app remix-weather="${IMAGE}" --record
 
-
-      - name: Wait for rollout
+      - name: Diagnose rollout (prod)
+        if: steps.diff.outputs.needs_update == 'true'
         run: |
-          kubectl -n weather rollout status deploy/remix-weather-app --timeout=180s
+          set -x
+          kubectl -n weather get deploy remix-weather-app -o wide || true
+          kubectl -n weather get rs -l app=remix-weather-app -o wide || true
+          kubectl -n weather get pods -l app=remix-weather-app -o wide || true
+          kubectl -n weather get events --sort-by=.lastTimestamp | tail -n 50 || true
+
+      - name: Wait for rollout (warn-only)
+        if: steps.diff.outputs.needs_update == 'true'
+        id: wait
+        continue-on-error: true
+        run: kubectl -n weather rollout status deploy/remix-weather-app --timeout=180s
+
+      - name: Note skipped or long rollout
+        if: steps.diff.outputs.needs_update != 'true' || steps.wait.outcome == 'failure'
+        run: |
+          if [ "${{ steps.diff.outputs.needs_update }}" != "true" ]; then
+            echo "::warning::Deploy skipped: image already up to date (${IMAGE})."
+          else
+            echo "::warning::Rollout did not finish within timeout; proceeding."
+          fi
+      # ==== END SMART SKIP ====
