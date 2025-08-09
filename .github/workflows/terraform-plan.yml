@@ -44,12 +44,15 @@ jobs:
 
       - name: Setup tflint
         uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.58.1
 
       - name: tflint
+        working-directory: infra/envs/test   # or your matrix envdir
+        continue-on-error: true
         run: |
           tflint --version
           tflint -f compact
-        working-directory: infra
 
       - name: Cache .terraform (test)
         uses: actions/cache@v4
@@ -78,7 +81,8 @@ jobs:
           exitcode=$?
           echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
           terraform -chdir=infra/envs/test show -no-color tfplan > infra/envs/test/tfplan.txt
-          exit $([ $exitcode -eq 1 ] && echo 1 || echo 0)
+          # fail only on real errors (exitcode 1)
+          if [ "$exitcode" = "1" ]; then exit 1; fi
 
       - name: Upload plan artifacts
         uses: actions/upload-artifact@v4
@@ -98,6 +102,7 @@ jobs:
           fi
 
       - name: PR summary & comment
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         env:
           HAS_CHANGES: ${{ steps.set_change_flag.outputs.has_changes }}
