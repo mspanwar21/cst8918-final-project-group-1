@@ -49,8 +49,13 @@ jobs:
       - name: Terraform validate
         run: terraform -chdir=${{ matrix.envdir }} validate -no-color
 
-      - name: Setup tflint
-        uses: terraform-linters/setup-tflint@v4
+      - name: tflint
+        working-directory: ${{ matrix.envdir }}
+        continue-on-error: true
+        run: |
+          tflint --version
+          tflint -f compact
+
 
       - name: tflint
         run: |
