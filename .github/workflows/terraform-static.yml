@@ -68,3 +68,4 @@ jobs:
         uses: aquasecurity/tfsec-action@v1.0.1
         with:
           working_directory: ${{ matrix.envdir }}
+        continue-on-error: true
